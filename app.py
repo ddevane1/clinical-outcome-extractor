@@ -47,45 +47,52 @@ def is_similar(a: str, b: str, threshold: float = FUZZY_THRESHOLD) -> bool:
 def ask_llm(chunk: str) -> str:
     prompt = (
         "You are an expert medical reviewer. CRITICAL: DO NOT HALLUCINATE OR INVENT ANY INFORMATION.\n\n"
-        "STRICT RULES:\n"
+        "IMPORTANT INSTRUCTIONS:\n"
         "1. Extract ONLY information explicitly stated in the text below.\n"
-        "2. Use the authors' EXACT WORDING (verbatim) - do not paraphrase.\n"
-        "3. If ANY information is not explicitly stated in the text, you MUST return \"None\".\n"
-        "4. Do NOT infer, assume, or guess any information.\n"
-        "5. Do NOT add information from your general knowledge.\n"
-        "6. If unsure whether something is stated, return \"None\".\n\n"
+        "2. Use the authors' EXACT WORDING (verbatim) when possible.\n"
+        "3. If ANY information is not found in the text, you MUST return \"None\".\n"
+        "4. For measurement methods: Look for HOW outcomes were measured (e.g., questionnaires, lab tests, clinical scales, hospital records, etc.)\n"
+        "5. For timepoints: Look for WHEN outcomes were measured (e.g., baseline, day 7, week 4, monthly, at discharge, etc.)\n"
+        "6. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n\n"
         "Extract the following information:\n\n"
+        "STUDY-LEVEL INFORMATION:\n"
         "• first_author_surname – surname of the first author (return \"None\" if not stated).\n"
         "• study_design – verbatim description of the study design (return \"None\" if not stated).\n"
         "• study_country – country or countries where the study was conducted (return \"None\" if not stated).\n"
         "• patient_population – verbatim description of participants (return \"None\" if not stated).\n"
         "• targeted_condition – verbatim disease or condition studied (return \"None\" if not stated).\n"
-        "• diagnostic_criteria – verbatim criteria the authors used to diagnose or define the targeted condition "
-        "(MUST return \"None\" if not explicitly stated).\n"
+        "• diagnostic_criteria – verbatim criteria used to diagnose/define the condition (return \"None\" if not stated).\n"
         "• interventions_tested – verbatim description of the intervention group(s) (return \"None\" if not stated).\n"
-        "• comparison_group – verbatim description of the control/comparator group(s) (return \"None\" if not stated).\n"
-        "• outcomes – list of outcomes; for each outcome capture:\n"
-        "    • outcome_measured – concise name of the outcome (return \"None\" if not stated).\n"
-        "    • outcome_definition – verbatim definition/explanation (MUST return \"None\" if authors gave no definition).\n"
-        "    • measurement_method – instrument, questionnaire, lab test, etc. (return \"None\" if not stated).\n"
-        "    • timepoint – when measured (e.g., 'Day 28', '12 weeks') (return \"None\" if not stated).\n\n"
-        "REMEMBER: If the text does not explicitly state something, you MUST return \"None\" for that field.\n\n"
+        "• comparison_group – verbatim description of the control/comparator group(s) (return \"None\" if not stated).\n\n"
+        "OUTCOME-LEVEL INFORMATION:\n"
+        "• outcomes – list of ALL outcomes mentioned; for each outcome capture:\n"
+        "    • outcome_measured – name of the outcome (e.g., mortality, hospital admission, pain score).\n"
+        "    • outcome_definition – how the authors defined this outcome (return \"None\" if no definition given).\n"
+        "    • measurement_method – HOW it was measured (e.g., \"VAS pain scale\", \"hospital records\", \"blood test\", \"patient diary\").\n"
+        "    • timepoint – WHEN it was measured (e.g., \"28 days\", \"baseline and 12 weeks\", \"daily for 7 days\").\n\n"
+        "Look carefully for measurement methods and timepoints - they may be mentioned separately from the outcome name.\n\n"
         "Return exactly this JSON structure:\n"
         "{\n"
         '  \"first_author_surname\": \"Smith\" or \"None\",\n'
         '  \"study_design\": \"Randomised controlled trial\" or \"None\",\n'
         '  \"study_country\": \"Ireland\" or \"None\",\n'
-        '  \"patient_population\": \"Adults with type 2 diabetes\" or \"None\",\n'
-        '  \"targeted_condition\": \"Type 2 diabetes\" or \"None\",\n'
-        '  \"diagnostic_criteria\": \"HbA1c ≥ 6.5%\" or \"None\",\n'
-        '  \"interventions_tested\": \"Metformin 500mg twice daily\" or \"None\",\n'
+        '  \"patient_population\": \"Adults aged 18-65 with confirmed COVID-19\" or \"None\",\n'
+        '  \"targeted_condition\": \"COVID-19\" or \"None\",\n'
+        '  \"diagnostic_criteria\": \"RT-PCR confirmed SARS-CoV-2\" or \"None\",\n'
+        '  \"interventions_tested\": \"Remdesivir 200mg IV day 1, then 100mg daily\" or \"None\",\n'
         '  \"comparison_group\": \"Placebo\" or \"None\",\n'
         '  \"outcomes\": [\n'
         "    {\n"
-        '      \"outcome_measured\": \"Admission to intensive care unit\" or \"None\",\n'
-        '      \"outcome_definition\": \"Admission to ICU for any cause within 30 days\" or \"None\",\n'
-        '      \"measurement_method\": \"hospital record review\" or \"None\",\n'
-        '      \"timepoint\": \"30 days\" or \"None\"\n'
+        '      \"outcome_measured\": \"All-cause mortality\",\n'
+        '      \"outcome_definition\": \"Death from any cause\" or \"None\",\n'
+        '      \"measurement_method\": \"Medical records review\",\n'
+        '      \"timepoint\": \"28 days\"\n'
+        "    },\n"
+        "    {\n"
+        '      \"outcome_measured\": \"Oxygen saturation\",\n'
+        '      \"outcome_definition\": \"None\",\n'
+        '      \"measurement_method\": \"Pulse oximetry\",\n'
+        '      \"timepoint\": \"Baseline, day 1, day 3, day 5, day 7\"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -103,8 +110,7 @@ def ask_llm(chunk: str) -> str:
 
 def extract_outcomes(text: str, pdf_name: str):
     max_tokens = 16000 - TOKENS_FOR_RESPONSE - 1000
-    records = []
-    meta = {}
+    study_info = {}
     
     # Collect all outcomes from all chunks first
     all_outcomes = []
@@ -119,19 +125,16 @@ def extract_outcomes(text: str, pdf_name: str):
         except json.JSONDecodeError:
             continue
 
-        # Update metadata from first successful chunk
-        if not meta:
-            meta = {
-                "pdf_name": pdf_name,
-                "first_author_surname": data.get("first_author_surname", "None"),
-                "study_design": data.get("study_design", "None"),
-                "study_country": data.get("study_country", "None"),
-                "patient_population": data.get("patient_population", "None"),
-                "targeted_condition": data.get("targeted_condition", "None"),
-                "diagnostic_criteria": data.get("diagnostic_criteria", "None"),
-                "interventions_tested": data.get("interventions_tested", "None"),
-                "comparison_group": data.get("comparison_group", "None"),
-            }
+        # Update study-level metadata (take first non-None value for each field)
+        if not study_info or any(v == "None" for v in study_info.values()):
+            for field in ["first_author_surname", "study_design", "study_country", 
+                         "patient_population", "targeted_condition", "diagnostic_criteria",
+                         "interventions_tested", "comparison_group"]:
+                current_value = study_info.get(field, "None")
+                new_value = data.get(field, "None")
+                # Update if current is None or empty and new value is not None
+                if (current_value == "None" or not current_value) and new_value != "None":
+                    study_info[field] = new_value
 
         # Collect all outcomes
         for o in data.get("outcomes", []):
@@ -149,24 +152,37 @@ def extract_outcomes(text: str, pdf_name: str):
             continue
             
         # Fuzzy deduplication
-        if any(is_similar(canon, prev) for prev in seen_outcomes):
-            continue  # skip near-duplicate
-            
-        seen_outcomes.append(canon)
-        unique_outcomes.append(o)
+        is_duplicate = False
+        for idx, prev in enumerate(seen_outcomes):
+            if is_similar(canon, prev):
+                # If it's a duplicate, check if we should merge timepoints
+                existing = unique_outcomes[idx]
+                new_timepoint = o.get("timepoint", "None")
+                existing_timepoint = existing.get("timepoint", "None")
+                
+                # Merge timepoints if different
+                if new_timepoint != "None" and existing_timepoint != "None" and new_timepoint != existing_timepoint:
+                    # Combine timepoints
+                    existing["timepoint"] = f"{existing_timepoint}, {new_timepoint}"
+                elif existing_timepoint == "None" and new_timepoint != "None":
+                    # Update if existing had no timepoint
+                    existing["timepoint"] = new_timepoint
+                
+                # Update measurement method if existing was None
+                if existing.get("measurement_method", "None") == "None" and o.get("measurement_method", "None") != "None":
+                    existing["measurement_method"] = o.get("measurement_method", "None")
+                    
+                is_duplicate = True
+                break
+        
+        if not is_duplicate:
+            seen_outcomes.append(canon)
+            unique_outcomes.append(o)
     
-    # Create records for unique outcomes only
-    for o in unique_outcomes:
-        record = meta.copy()
-        record.update({
-            "outcome_measured": o.get("outcome_measured", "None"),
-            "outcome_definition": o.get("outcome_definition", "None"),
-            "measurement_method": o.get("measurement_method", "None"),
-            "timepoint": o.get("timepoint", "None"),
-        })
-        records.append(record)
-
-    return records
+    # Add pdf_name to study_info
+    study_info["pdf_name"] = pdf_name
+    
+    return study_info, unique_outcomes
 
 # ---------- Streamlit UI ----------
 st.title("Clinical Trial Extractor – Deduplicated Outcomes")
@@ -178,15 +194,34 @@ files = st.file_uploader(
 )
 
 if files:
-    rows = []
+    all_results = []
     progress = st.progress(0)
+    
     for idx, f in enumerate(files):
         with st.spinner(f"Processing {f.name}..."):
             text = pdf_to_text(f)
-            rows.extend(extract_outcomes(text, f.name))
+            study_info, outcomes = extract_outcomes(text, f.name)
+            
+            # Store results as tuple of study info and outcomes
+            if outcomes:
+                all_results.append((study_info, outcomes))
+                
         progress.progress((idx + 1) / len(files))
 
-    if rows:
+    if all_results:
+        # Convert to rows for DataFrame
+        rows = []
+        for study_info, outcomes in all_results:
+            for outcome in outcomes:
+                row = study_info.copy()
+                row.update({
+                    "outcome_measured": outcome.get("outcome_measured", "None"),
+                    "outcome_definition": outcome.get("outcome_definition", "None"),
+                    "measurement_method": outcome.get("measurement_method", "None"),
+                    "timepoint": outcome.get("timepoint", "None"),
+                })
+                rows.append(row)
+        
         df = pd.DataFrame(rows)
 
         # Desired column order
@@ -207,10 +242,23 @@ if files:
         ]
         df = df[desired_cols]
 
+        # Display summary
         st.success(f"Extracted {len(df)} unique outcomes from {len(files)} PDF(s)")
+        
+        # Show study-level information separately
+        st.subheader("Study Information")
+        study_cols = ["pdf_name", "first_author_surname", "study_design", "study_country", 
+                     "patient_population", "targeted_condition", "diagnostic_criteria",
+                     "interventions_tested", "comparison_group"]
+        study_df = df[study_cols].drop_duplicates()
+        st.dataframe(study_df)
+        
+        # Show outcomes
+        st.subheader("Outcomes Extracted")
         st.dataframe(df)
+        
         st.download_button(
-            "Download CSV",
+            "Download Complete CSV",
             df.to_csv(index=False),
             "outcomes.csv",
             mime="text/csv"
