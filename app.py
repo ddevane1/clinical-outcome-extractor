@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# -------- app.py (full revised version) --------
+# -------- app.py (final revised version) --------
 import os, json, pdfplumber, pandas as pd, tiktoken
 from openai import OpenAI
 import streamlit as st
 
 # ----- CONFIG -----
-MODEL = "gpt-4o"             # switch to gpt-4o-mini or gpt-3.5-turbo if needed
+MODEL = "gpt-4o"             # change to gpt-4o-mini or gpt-3.5-turbo if needed
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
 # -------------------
@@ -36,15 +36,21 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
 def ask_llm(chunk: str) -> str:
     prompt = (
         "You are an expert medical reviewer.\n"
-        "From the text below, extract the following information. Use verbatim text where possible:\n"
+        "From the text below, extract the following information. Use the authors' "
+        "exact wording (verbatim) whenever possible:\n\n"
         "• first_author_surname – surname of the first author.\n"
-        "• study_design – type of study.\n"
-        "• study_country – country/countries.\n"
-        "• patient_population – verbatim participant description.\n"
-        "• targeted_condition – disease or condition studied.\n"
-        "• diagnostic_criteria – verbatim diagnostic criteria.\n"
-        "• interventions_tested – verbatim description.\n"
-        "• outcomes – list with description, definition_verbatim, measurement_method, timepoint.\n\n"
+        "• study_design – verbatim description of the study design.\n"
+        "• study_country – country or countries where the study was conducted.\n"
+        "• patient_population – verbatim description of participants.\n"
+        "• targeted_condition – verbatim disease or condition studied.\n"
+        "• diagnostic_criteria – verbatim criteria the authors used to diagnose or define the targeted condition "
+        "(write \"None\" if not stated).\n"
+        "• interventions_tested – verbatim description of the interventions.\n"
+        "• outcomes – list; for each outcome capture:\n"
+        "    • outcome_measured – concise name of the outcome.\n"
+        "    • outcome_definition – verbatim definition/explanation (write \"None\" if authors gave none).\n"
+        "    • measurement_method – instrument, questionnaire, lab test, etc.\n"
+        "    • timepoint – when measured (e.g., 'Day 28', '12 weeks').\n\n"
         "Return exactly this JSON structure (no extra keys):\n"
         "{\n"
         '  \"first_author_surname\": \"Surname\",\n'
@@ -56,8 +62,8 @@ def ask_llm(chunk: str) -> str:
         '  \"interventions_tested\": \"Metformin vs placebo\",\n'
         '  \"outcomes\": [\n'
         "    {\n"
-        '      \"description\": \"Change in HbA1c\",\n'
-        '      \"definition_verbatim\": \"The primary outcome was the change in HbA1c from baseline to 12 weeks.\",\n'
+        '      \"outcome_measured\": \"Change in HbA1c\",\n'
+        '      \"outcome_definition\": \"The primary outcome was the change in HbA1c from baseline to 12 weeks.\",\n'
         '      \"measurement_method\": \"blood test\",\n'
         '      \"timepoint\": \"12 weeks\"\n'
         "    }\n"
@@ -98,8 +104,8 @@ def extract_outcomes(text: str, pdf_name: str):
                 "targeted_condition": data.get("targeted_condition", ""),
                 "diagnostic_criteria": data.get("diagnostic_criteria", ""),
                 "interventions_tested": data.get("interventions_tested", ""),
-                "description": o.get("description", ""),
-                "definition_verbatim": o.get("definition_verbatim", ""),
+                "outcome_measured": o.get("outcome_measured", ""),
+                "outcome_definition": o.get("outcome_definition", ""),
                 "measurement_method": o.get("measurement_method", ""),
                 "timepoint": o.get("timepoint", ""),
             })
@@ -124,6 +130,24 @@ if files:
 
     if rows:
         df = pd.DataFrame(rows)
+
+        # Order columns
+        desired_cols = [
+            "pdf_name",
+            "first_author_surname",
+            "study_design",
+            "study_country",
+            "patient_population",
+            "targeted_condition",
+            "diagnostic_criteria",
+            "interventions_tested",
+            "outcome_measured",
+            "outcome_definition",
+            "measurement_method",
+            "timepoint",
+        ]
+        df = df[desired_cols]
+
         st.dataframe(df)
         st.download_button(
             "Download CSV",
