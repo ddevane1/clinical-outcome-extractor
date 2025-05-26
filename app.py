@@ -35,14 +35,48 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
         yield " ".join(chunk)
 
 # Simple normalisation for outcome names
-STOPWORDS = {"the", "of", "in", "to", "for", "and", "unit", "care", "confirmed"}
+STOPWORDS = {"the", "of", "in", "to", "for", "and", "unit", "care", "confirmed", "due", "an", "visits", "visit", "consultations", "admission", "admissions"}
 def canonical(text: str) -> str:
     text = re.sub(r"[^\w\s]", "", text.lower())
     words = [w for w in text.split() if w not in STOPWORDS]
-    return " ".join(words)
+    # Sort words to help match "hospital admission" with "admission to hospital"
+    return " ".join(sorted(words))
 
 def is_similar(a: str, b: str, threshold: float = FUZZY_THRESHOLD) -> bool:
-    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+    # Direct similarity check
+    if difflib.SequenceMatcher(None, a, b).ratio() >= threshold:
+        return True
+    
+    # Check if one is a subset of the other (for cases like "hospital admission" vs "hospitalization")
+    a_words = set(a.split())
+    b_words = set(b.split())
+    
+    # If one set of words is a subset of the other, consider them similar
+    if a_words.issubset(b_words) or b_words.issubset(a_words):
+        return True
+    
+    # Check for common medical abbreviations
+    replacements = [
+        ("hospitalization", "hospital"),
+        ("hospitalisation", "hospital"),
+        ("icu", "intensive"),
+        ("picu", "intensive"),
+        ("emergency", "emergency"),
+        ("ed", "emergency"),
+        ("primary", "primary"),
+        ("gp", "primary")
+    ]
+    
+    a_normalized = a
+    b_normalized = b
+    for long_form, short_form in replacements:
+        a_normalized = a_normalized.replace(long_form, short_form)
+        b_normalized = b_normalized.replace(long_form, short_form)
+    
+    if difflib.SequenceMatcher(None, a_normalized, b_normalized).ratio() >= threshold:
+        return True
+    
+    return False
 
 def ask_llm(chunk: str) -> str:
     prompt = (
@@ -164,28 +198,46 @@ def extract_outcomes(text: str, pdf_name: str):
         is_duplicate = False
         for idx, prev in enumerate(seen_outcomes):
             if is_similar(canon, prev):
-                # If it's a duplicate, check if we should merge timepoints
-                existing = unique_outcomes[idx]
-                new_timepoint = o.get("timepoint", "None")
-                existing_timepoint = existing.get("timepoint", "None")
-                
-                # Merge timepoints if different
-                if new_timepoint != "None" and existing_timepoint != "None" and new_timepoint != existing_timepoint:
-                    # Combine timepoints
-                    existing["timepoint"] = f"{existing_timepoint}, {new_timepoint}"
-                elif existing_timepoint == "None" and new_timepoint != "None":
-                    # Update if existing had no timepoint
-                    existing["timepoint"] = new_timepoint
-                
-                # Update measurement method if existing was None or merge if different
-                new_method = o.get("measurement_method", "None")
-                existing_method = existing.get("measurement_method", "None")
-                if existing_method == "None" and new_method != "None":
-                    existing["measurement_method"] = new_method
-                
-                # Update definition if existing was None
-                if existing.get("outcome_definition", "None") == "None" and o.get("outcome_definition", "None") != "None":
-                    existing["outcome_definition"] = o.get("outcome_definition", "None")
+        # If it's a duplicate, check if we should merge timepoints
+        existing = unique_outcomes[idx]
+        new_timepoint = o.get("timepoint", "None")
+        existing_timepoint = existing.get("timepoint", "None")
+        
+        # Merge timepoints if different and both are not None
+        if new_timepoint != "None" and existing_timepoint != "None" and new_timepoint != existing_timepoint:
+            # Combine unique timepoints
+            all_timepoints = set()
+            for tp in [existing_timepoint, new_timepoint]:
+                all_timepoints.update([t.strip() for t in tp.split(",")])
+            existing["timepoint"] = ", ".join(sorted(all_timepoints))
+        elif existing_timepoint == "None" and new_timepoint != "None":
+            existing["timepoint"] = new_timepoint
+        
+        # Update measurement method - prefer non-None value
+        new_method = o.get("measurement_method", "None")
+        existing_method = existing.get("measurement_method", "None")
+        if existing_method == "None" and new_method != "None":
+            existing["measurement_method"] = new_method
+        elif new_method != "None" and existing_method != "None" and new_method != existing_method:
+            # If both have methods but different, keep the more detailed one
+            if len(new_method) > len(existing_method):
+                existing["measurement_method"] = new_method
+        
+        # Update definition - prefer non-None value
+        new_def = o.get("outcome_definition", "None")
+        existing_def = existing.get("outcome_definition", "None")
+        if existing_def == "None" and new_def != "None":
+            existing["outcome_definition"] = new_def
+        elif new_def != "None" and existing_def != "None" and new_def != existing_def:
+            # If both have definitions but different, keep the more detailed one
+            if len(new_def) > len(existing_def):
+                existing["outcome_definition"] = new_def
+        
+        # Update outcome name - prefer the more detailed/specific one
+        new_name = o.get("outcome_measured", "")
+        existing_name = existing.get("outcome_measured", "")
+        if len(new_name) > len(existing_name):
+            existing["outcome_measured"] = new_name
                     
                 is_duplicate = True
                 break
