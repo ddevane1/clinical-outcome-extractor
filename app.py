@@ -198,46 +198,46 @@ def extract_outcomes(text: str, pdf_name: str):
         is_duplicate = False
         for idx, prev in enumerate(seen_outcomes):
             if is_similar(canon, prev):
-        # If it's a duplicate, check if we should merge timepoints
-        existing = unique_outcomes[idx]
-        new_timepoint = o.get("timepoint", "None")
-        existing_timepoint = existing.get("timepoint", "None")
-        
-        # Merge timepoints if different and both are not None
-        if new_timepoint != "None" and existing_timepoint != "None" and new_timepoint != existing_timepoint:
-            # Combine unique timepoints
-            all_timepoints = set()
-            for tp in [existing_timepoint, new_timepoint]:
-                all_timepoints.update([t.strip() for t in tp.split(",")])
-            existing["timepoint"] = ", ".join(sorted(all_timepoints))
-        elif existing_timepoint == "None" and new_timepoint != "None":
-            existing["timepoint"] = new_timepoint
-        
-        # Update measurement method - prefer non-None value
-        new_method = o.get("measurement_method", "None")
-        existing_method = existing.get("measurement_method", "None")
-        if existing_method == "None" and new_method != "None":
-            existing["measurement_method"] = new_method
-        elif new_method != "None" and existing_method != "None" and new_method != existing_method:
-            # If both have methods but different, keep the more detailed one
-            if len(new_method) > len(existing_method):
-                existing["measurement_method"] = new_method
-        
-        # Update definition - prefer non-None value
-        new_def = o.get("outcome_definition", "None")
-        existing_def = existing.get("outcome_definition", "None")
-        if existing_def == "None" and new_def != "None":
-            existing["outcome_definition"] = new_def
-        elif new_def != "None" and existing_def != "None" and new_def != existing_def:
-            # If both have definitions but different, keep the more detailed one
-            if len(new_def) > len(existing_def):
-                existing["outcome_definition"] = new_def
-        
-        # Update outcome name - prefer the more detailed/specific one
-        new_name = o.get("outcome_measured", "")
-        existing_name = existing.get("outcome_measured", "")
-        if len(new_name) > len(existing_name):
-            existing["outcome_measured"] = new_name
+                # If it's a duplicate, merge the information
+                existing = unique_outcomes[idx]
+                new_timepoint = o.get("timepoint", "None")
+                existing_timepoint = existing.get("timepoint", "None")
+                
+                # Merge timepoints if different and both are not None
+                if new_timepoint != "None" and existing_timepoint != "None" and new_timepoint != existing_timepoint:
+                    # Combine unique timepoints
+                    all_timepoints = set()
+                    for tp in [existing_timepoint, new_timepoint]:
+                        all_timepoints.update([t.strip() for t in tp.split(",")])
+                    existing["timepoint"] = ", ".join(sorted(all_timepoints))
+                elif existing_timepoint == "None" and new_timepoint != "None":
+                    existing["timepoint"] = new_timepoint
+                
+                # Update measurement method - prefer non-None value
+                new_method = o.get("measurement_method", "None")
+                existing_method = existing.get("measurement_method", "None")
+                if existing_method == "None" and new_method != "None":
+                    existing["measurement_method"] = new_method
+                elif new_method != "None" and existing_method != "None" and new_method != existing_method:
+                    # If both have methods but different, keep the more detailed one
+                    if len(new_method) > len(existing_method):
+                        existing["measurement_method"] = new_method
+                
+                # Update definition - prefer non-None value
+                new_def = o.get("outcome_definition", "None")
+                existing_def = existing.get("outcome_definition", "None")
+                if existing_def == "None" and new_def != "None":
+                    existing["outcome_definition"] = new_def
+                elif new_def != "None" and existing_def != "None" and new_def != existing_def:
+                    # If both have definitions but different, keep the more detailed one
+                    if len(new_def) > len(existing_def):
+                        existing["outcome_definition"] = new_def
+                
+                # Update outcome name - prefer the more detailed/specific one
+                new_name = o.get("outcome_measured", "")
+                existing_name = existing.get("outcome_measured", "")
+                if len(new_name) > len(existing_name):
+                    existing["outcome_measured"] = new_name
                     
                 is_duplicate = True
                 break
