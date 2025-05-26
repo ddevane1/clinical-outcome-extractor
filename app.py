@@ -8,7 +8,7 @@ import streamlit as st
 MODEL = "gpt-4o"
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
-FUZZY_THRESHOLD = 0.85  # similarity threshold for deduping outcomes
+FUZZY_THRESHOLD = 0.75  # similarity threshold for deduping outcomes (lowered to catch more duplicates)
 # -------------------
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -51,9 +51,14 @@ def ask_llm(chunk: str) -> str:
         "1. Extract ONLY information explicitly stated in the text below.\n"
         "2. Use the authors' EXACT WORDING (verbatim) when possible.\n"
         "3. If ANY information is not found in the text, you MUST return \"None\".\n"
-        "4. For measurement methods: Look for HOW outcomes were measured (e.g., questionnaires, lab tests, clinical scales, hospital records, etc.)\n"
+        "4. For measurement methods: Look CAREFULLY for HOW outcomes were measured. This includes:\n"
+        "   - Data sources (hospital records, primary care records, emergency records, claims data)\n"
+        "   - Assessment tools (questionnaires, scales, lab tests)\n"
+        "   - Review methods (chart review, database query, patient interview)\n"
+        "   - ANY description of how the outcome was ascertained or measured\n"
         "5. For timepoints: Look for WHEN outcomes were measured (e.g., baseline, day 7, week 4, monthly, at discharge, etc.)\n"
-        "6. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n\n"
+        "6. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n"
+        "7. The measurement method might be described in a different paragraph from the outcome - look carefully!\n\n"
         "Extract the following information:\n\n"
         "STUDY-LEVEL INFORMATION:\n"
         "• first_author_surname – surname of the first author (return \"None\" if not stated).\n"
@@ -68,9 +73,13 @@ def ask_llm(chunk: str) -> str:
         "• outcomes – list of ALL outcomes mentioned; for each outcome capture:\n"
         "    • outcome_measured – name of the outcome (e.g., mortality, hospital admission, pain score).\n"
         "    • outcome_definition – how the authors defined this outcome (return \"None\" if no definition given).\n"
-        "    • measurement_method – HOW it was measured (e.g., \"VAS pain scale\", \"hospital records\", \"blood test\", \"patient diary\").\n"
+        "    • measurement_method – HOW it was measured. This is CRITICAL - look for:\n"
+        "        - Where data came from (hospital records, primary care records, claims database, etc.)\n"
+        "        - What tool was used (specific questionnaire, lab test, clinical assessment)\n"
+        "        - How it was collected (chart review, patient interview, automated query)\n"
+        "        If you can't find ANY information about how it was measured, only then return \"None\"\n"
         "    • timepoint – WHEN it was measured (e.g., \"28 days\", \"baseline and 12 weeks\", \"daily for 7 days\").\n\n"
-        "Look carefully for measurement methods and timepoints - they may be mentioned separately from the outcome name.\n\n"
+        "IMPORTANT: Measurement methods are often described separately from outcome names. Look throughout the text!\n\n"
         "Return exactly this JSON structure:\n"
         "{\n"
         '  \"first_author_surname\": \"Smith\" or \"None\",\n'
@@ -168,9 +177,15 @@ def extract_outcomes(text: str, pdf_name: str):
                     # Update if existing had no timepoint
                     existing["timepoint"] = new_timepoint
                 
-                # Update measurement method if existing was None
-                if existing.get("measurement_method", "None") == "None" and o.get("measurement_method", "None") != "None":
-                    existing["measurement_method"] = o.get("measurement_method", "None")
+                # Update measurement method if existing was None or merge if different
+                new_method = o.get("measurement_method", "None")
+                existing_method = existing.get("measurement_method", "None")
+                if existing_method == "None" and new_method != "None":
+                    existing["measurement_method"] = new_method
+                
+                # Update definition if existing was None
+                if existing.get("outcome_definition", "None") == "None" and o.get("outcome_definition", "None") != "None":
+                    existing["outcome_definition"] = o.get("outcome_definition", "None")
                     
                 is_duplicate = True
                 break
