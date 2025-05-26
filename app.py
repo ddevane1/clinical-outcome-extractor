@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -------- app.py (final revised version) --------
+# -------- app.py (final consolidated version) --------
 import os, json, pdfplumber, pandas as pd, tiktoken
 from openai import OpenAI
 import streamlit as st
@@ -8,6 +8,7 @@ import streamlit as st
 MODEL = "gpt-4o"             # change to gpt-4o-mini or gpt-3.5-turbo if needed
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
+DROP_DUPLICATE_OUTCOMES = True   # set False if you want raw rows
 # -------------------
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -84,6 +85,8 @@ def ask_llm(chunk: str) -> str:
 def extract_outcomes(text: str, pdf_name: str):
     max_tokens = 16000 - TOKENS_FOR_RESPONSE - 1000
     records = []
+    meta = {}  # capture meta fields once
+
     for chunk in split_text(text, max_tokens):
         raw = ask_llm(chunk)
         start = raw.find("{")
@@ -94,8 +97,9 @@ def extract_outcomes(text: str, pdf_name: str):
         except json.JSONDecodeError:
             continue
 
-        for o in data.get("outcomes", []):
-            records.append({
+        # Capture meta once
+        if not meta:
+            meta = {
                 "pdf_name": pdf_name,
                 "first_author_surname": data.get("first_author_surname", ""),
                 "study_design": data.get("study_design", ""),
@@ -104,11 +108,19 @@ def extract_outcomes(text: str, pdf_name: str):
                 "targeted_condition": data.get("targeted_condition", ""),
                 "diagnostic_criteria": data.get("diagnostic_criteria", ""),
                 "interventions_tested": data.get("interventions_tested", ""),
+            }
+
+        # Append each outcome row
+        for o in data.get("outcomes", []):
+            record = meta.copy()
+            record.update({
                 "outcome_measured": o.get("outcome_measured", ""),
                 "outcome_definition": o.get("outcome_definition", ""),
                 "measurement_method": o.get("measurement_method", ""),
                 "timepoint": o.get("timepoint", ""),
             })
+            records.append(record)
+
     return records
 
 # ---------- Streamlit UI ----------
@@ -131,7 +143,15 @@ if files:
     if rows:
         df = pd.DataFrame(rows)
 
-        # Order columns
+        # Optional: drop duplicate outcome rows (same outcome + timepoint)
+        if DROP_DUPLICATE_OUTCOMES:
+            df = df.drop_duplicates(subset=[
+                "pdf_name",
+                "outcome_measured",
+                "timepoint"
+            ])
+
+        # Desired column order
         desired_cols = [
             "pdf_name",
             "first_author_surname",
