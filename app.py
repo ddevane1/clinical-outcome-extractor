@@ -315,19 +315,8 @@ if files:
         # Display summary
         st.success(f"Extracted {len(df)} unique outcomes from {len(files)} PDF(s)")
         
-        # Show study-level information separately
-        st.subheader("Study Information")
-        study_cols = ["pdf_name", "first_author_surname", "study_design", "study_country", 
-                     "patient_population", "targeted_condition", "diagnostic_criteria",
-                     "interventions_tested", "comparison_group"]
-        # Only use columns that actually exist
-        available_study_cols = [col for col in study_cols if col in df.columns]
-        if available_study_cols:
-            study_df = df[available_study_cols].drop_duplicates()
-            st.dataframe(study_df)
-        
-        # Show outcomes
-        st.subheader("Outcomes Extracted")
+        # Show the complete table
+        st.subheader("Extracted Clinical Trial Data")
         st.dataframe(df)
         
         st.download_button(
