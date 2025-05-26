@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# -------- app.py (final consolidated version with comparison_group) --------
-import os, json, pdfplumber, pandas as pd, tiktoken
+# -------- app.py (deduplication with fuzzy matching) --------
+import os, json, re, pdfplumber, pandas as pd, tiktoken, difflib
 from openai import OpenAI
 import streamlit as st
 
 # ----- CONFIG -----
-MODEL = "gpt-4o"             # change to gpt-4o-mini or gpt-3.5-turbo if needed
+MODEL = "gpt-4o"
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
-DROP_DUPLICATE_OUTCOMES = True
+FUZZY_THRESHOLD = 0.85  # similarity threshold for deduping outcomes
 # -------------------
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -34,11 +34,21 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
     if chunk:
         yield " ".join(chunk)
 
+# Simple normalisation for outcome names
+STOPWORDS = {"the", "of", "in", "to", "for", "and", "unit", "care", "confirmed"}
+def canonical(text: str) -> str:
+    text = re.sub(r"[^\w\s]", "", text.lower())
+    words = [w for w in text.split() if w not in STOPWORDS]
+    return " ".join(words)
+
+def is_similar(a: str, b: str, threshold: float = FUZZY_THRESHOLD) -> bool:
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
 def ask_llm(chunk: str) -> str:
     prompt = (
         "You are an expert medical reviewer.\n"
         "From the text below, extract the following information. Use the authors' "
-        "exact wording (verbatim) whenever possible:\n\n"
+        "exact wording (verbatim) whenever possible. Return each unique outcome only once.\n\n"
         "• first_author_surname – surname of the first author.\n"
         "• study_design – verbatim description of the study design.\n"
         "• study_country – country or countries where the study was conducted.\n"
@@ -48,7 +58,7 @@ def ask_llm(chunk: str) -> str:
         "(write \"None\" if not stated).\n"
         "• interventions_tested – verbatim description of the intervention group(s).\n"
         "• comparison_group – verbatim description of the control/comparator group(s).\n"
-        "• outcomes – **deduplicated list**; for each unique outcome capture:\n"
+        "• outcomes – **deduplicated list**; for each outcome capture:\n"
         "    • outcome_measured – concise name of the outcome.\n"
         "    • outcome_definition – verbatim definition/explanation (write \"None\" if authors gave none).\n"
         "    • measurement_method – instrument, questionnaire, lab test, etc.\n"
@@ -87,7 +97,8 @@ def ask_llm(chunk: str) -> str:
 def extract_outcomes(text: str, pdf_name: str):
     max_tokens = 16000 - TOKENS_FOR_RESPONSE - 1000
     records = []
-    meta = {}  # capture meta fields once
+    meta = {}
+    seen_outcomes = []  # list of canonical outcome names we've kept
 
     for chunk in split_text(text, max_tokens):
         raw = ask_llm(chunk)
@@ -99,7 +110,6 @@ def extract_outcomes(text: str, pdf_name: str):
         except json.JSONDecodeError:
             continue
 
-        # Capture meta only once
         if not meta:
             meta = {
                 "pdf_name": pdf_name,
@@ -113,8 +123,13 @@ def extract_outcomes(text: str, pdf_name: str):
                 "comparison_group": data.get("comparison_group", ""),
             }
 
-        # Append each outcome row
         for o in data.get("outcomes", []):
+            canon = canonical(o.get("outcome_measured", ""))
+            # Fuzzy deduplication
+            if any(is_similar(canon, prev) for prev in seen_outcomes):
+                continue  # skip near-duplicate
+            seen_outcomes.append(canon)
+
             record = meta.copy()
             record.update({
                 "outcome_measured": o.get("outcome_measured", ""),
@@ -127,7 +142,7 @@ def extract_outcomes(text: str, pdf_name: str):
     return records
 
 # ---------- Streamlit UI ----------
-st.title("Clinical Trial Extractor – Study Details & Outcomes")
+st.title("Clinical Trial Extractor – Deduplicated Outcomes")
 
 files = st.file_uploader(
     "Upload PDF trial report(s)",
@@ -145,12 +160,6 @@ if files:
 
     if rows:
         df = pd.DataFrame(rows)
-
-        # Deduplicate outcome rows (case‑insensitive)
-        if DROP_DUPLICATE_OUTCOMES:
-            df["outcome_measured_lower"] = df["outcome_measured"].str.lower().str.strip()
-            df = df.drop_duplicates(subset=["pdf_name", "outcome_measured_lower"])
-            df = df.drop(columns=["outcome_measured_lower"])
 
         # Desired column order
         desired_cols = [
