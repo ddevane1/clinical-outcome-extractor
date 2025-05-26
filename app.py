@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# -------- app.py (GPT‑4o with debug prints) --------
+# -------- app.py (full revised version) --------
 import os, json, pdfplumber, pandas as pd, tiktoken
 from openai import OpenAI
 import streamlit as st
 
 # ----- CONFIG -----
-MODEL = "gpt-4o"             # switch to "gpt-4o-mini" or "gpt-3.5-turbo" if needed
+MODEL = "gpt-4o"             # switch to gpt-4o-mini or gpt-3.5-turbo if needed
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
 # -------------------
@@ -36,18 +36,24 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
 def ask_llm(chunk: str) -> str:
     prompt = (
         "You are an expert medical reviewer.\n"
-        "From the text below, extract the following information:\n"
-        "1. Surname of the last author listed on the paper.\n"
-        "2. Year of publication (four digits).\n"
-        "3. For each clinical outcome, extract:\n"
-        "   • description – concise name of the outcome.\n"
-        "   • definition_verbatim – full sentence(s) from the paper that define or explain the outcome.\n"
-        "   • measurement_method – instrument, questionnaire, lab test, etc.\n"
-        "   • timepoint – when it was measured (e.g., 'Day 28', '12 weeks').\n\n"
+        "From the text below, extract the following information. Use verbatim text where possible:\n"
+        "• first_author_surname – surname of the first author.\n"
+        "• study_design – type of study.\n"
+        "• study_country – country/countries.\n"
+        "• patient_population – verbatim participant description.\n"
+        "• targeted_condition – disease or condition studied.\n"
+        "• diagnostic_criteria – verbatim diagnostic criteria.\n"
+        "• interventions_tested – verbatim description.\n"
+        "• outcomes – list with description, definition_verbatim, measurement_method, timepoint.\n\n"
         "Return exactly this JSON structure (no extra keys):\n"
         "{\n"
-        '  \"last_author_surname\": \"Surname\",\n'
-        '  \"publication_year\": 2024,\n'
+        '  \"first_author_surname\": \"Surname\",\n'
+        '  \"study_design\": \"Randomised controlled trial\",\n'
+        '  \"study_country\": \"Ireland\",\n'
+        '  \"patient_population\": \"Adults with type 2 diabetes\",\n'
+        '  \"targeted_condition\": \"Type 2 diabetes\",\n'
+        '  \"diagnostic_criteria\": \"HbA1c ≥ 6.5%\",\n'
+        '  \"interventions_tested\": \"Metformin vs placebo\",\n'
         '  \"outcomes\": [\n'
         "    {\n"
         '      \"description\": \"Change in HbA1c\",\n'
@@ -65,41 +71,33 @@ def ask_llm(chunk: str) -> str:
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
         max_tokens=TOKENS_FOR_RESPONSE,
-        response_format={"type": "json_object"}  # strict JSON
+        response_format={"type": "json_object"}
     )
     return response.choices[0].message.content
 
-def extract_outcomes(text: str):
+def extract_outcomes(text: str, pdf_name: str):
     max_tokens = 16000 - TOKENS_FOR_RESPONSE - 1000
     records = []
-    meta = {}
-
-    for idx, chunk in enumerate(split_text(text, max_tokens)):
+    for chunk in split_text(text, max_tokens):
         raw = ask_llm(chunk)
-
-        # ---- DEBUG PRINTS ----
-        print(f"\n=== RAW RESPONSE for chunk {idx+1} (first 1000 chars) ===\n")
-        print(raw[:1000])
-        print("\n=== END RAW RESPONSE ===\n")
-        # ----------------------
-
         start = raw.find("{")
         if start == -1:
             continue
         try:
             data = json.loads(raw[start:])
-        except json.JSONDecodeError as e:
-            print("JSONDecodeError:", e)
+        except json.JSONDecodeError:
             continue
-
-        if not meta and "last_author_surname" in data:
-            meta["last_author_surname"] = data.get("last_author_surname", "")
-            meta["publication_year"] = data.get("publication_year", "")
 
         for o in data.get("outcomes", []):
             records.append({
-                "last_author_surname": meta.get("last_author_surname", ""),
-                "publication_year": meta.get("publication_year", ""),
+                "pdf_name": pdf_name,
+                "first_author_surname": data.get("first_author_surname", ""),
+                "study_design": data.get("study_design", ""),
+                "study_country": data.get("study_country", ""),
+                "patient_population": data.get("patient_population", ""),
+                "targeted_condition": data.get("targeted_condition", ""),
+                "diagnostic_criteria": data.get("diagnostic_criteria", ""),
+                "interventions_tested": data.get("interventions_tested", ""),
                 "description": o.get("description", ""),
                 "definition_verbatim": o.get("definition_verbatim", ""),
                 "measurement_method": o.get("measurement_method", ""),
@@ -108,7 +106,7 @@ def extract_outcomes(text: str):
     return records
 
 # ---------- Streamlit UI ----------
-st.title("LLM‑Driven Outcome Extractor (GPT‑4o, debug mode)")
+st.title("Clinical Trial Extractor – Study Details & Outcomes")
 
 files = st.file_uploader(
     "Upload PDF trial report(s)",
@@ -121,7 +119,7 @@ if files:
     progress = st.progress(0)
     for idx, f in enumerate(files):
         text = pdf_to_text(f)
-        rows.extend(extract_outcomes(text))
+        rows.extend(extract_outcomes(text, f.name))
         progress.progress((idx + 1) / len(files))
 
     if rows:
@@ -134,4 +132,4 @@ if files:
             mime="text/csv"
         )
     else:
-        st.error("No outcomes extracted.")
+        st.error("No information extracted.")
