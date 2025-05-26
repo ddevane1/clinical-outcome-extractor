@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -------- app.py (final consolidated version) --------
+# -------- app.py (final consolidated version with comparison_group) --------
 import os, json, pdfplumber, pandas as pd, tiktoken
 from openai import OpenAI
 import streamlit as st
@@ -8,7 +8,7 @@ import streamlit as st
 MODEL = "gpt-4o"             # change to gpt-4o-mini or gpt-3.5-turbo if needed
 TOKENS_FOR_RESPONSE = 1024
 OVERLAP_TOKENS = 100
-DROP_DUPLICATE_OUTCOMES = True   # set False if you want raw rows
+DROP_DUPLICATE_OUTCOMES = True
 # -------------------
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -46,8 +46,9 @@ def ask_llm(chunk: str) -> str:
         "• targeted_condition – verbatim disease or condition studied.\n"
         "• diagnostic_criteria – verbatim criteria the authors used to diagnose or define the targeted condition "
         "(write \"None\" if not stated).\n"
-        "• interventions_tested – verbatim description of the interventions.\n"
-        "• outcomes – list; for each outcome capture:\n"
+        "• interventions_tested – verbatim description of the intervention group(s).\n"
+        "• comparison_group – verbatim description of the control/comparator group(s).\n"
+        "• outcomes – **deduplicated list**; for each unique outcome capture:\n"
         "    • outcome_measured – concise name of the outcome.\n"
         "    • outcome_definition – verbatim definition/explanation (write \"None\" if authors gave none).\n"
         "    • measurement_method – instrument, questionnaire, lab test, etc.\n"
@@ -60,13 +61,14 @@ def ask_llm(chunk: str) -> str:
         '  \"patient_population\": \"Adults with type 2 diabetes\",\n'
         '  \"targeted_condition\": \"Type 2 diabetes\",\n'
         '  \"diagnostic_criteria\": \"HbA1c ≥ 6.5%\",\n'
-        '  \"interventions_tested\": \"Metformin vs placebo\",\n'
+        '  \"interventions_tested\": \"Metformin\",\n'
+        '  \"comparison_group\": \"Placebo\",\n'
         '  \"outcomes\": [\n'
         "    {\n"
-        '      \"outcome_measured\": \"Change in HbA1c\",\n'
-        '      \"outcome_definition\": \"The primary outcome was the change in HbA1c from baseline to 12 weeks.\",\n'
-        '      \"measurement_method\": \"blood test\",\n'
-        '      \"timepoint\": \"12 weeks\"\n'
+        '      \"outcome_measured\": \"Admission to intensive care unit\",\n'
+        '      \"outcome_definition\": \"Admission to ICU for any cause within 30 days of randomisation.\",\n'
+        '      \"measurement_method\": \"hospital record review\",\n'
+        '      \"timepoint\": \"30 days\"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -97,7 +99,7 @@ def extract_outcomes(text: str, pdf_name: str):
         except json.JSONDecodeError:
             continue
 
-        # Capture meta once
+        # Capture meta only once
         if not meta:
             meta = {
                 "pdf_name": pdf_name,
@@ -108,6 +110,7 @@ def extract_outcomes(text: str, pdf_name: str):
                 "targeted_condition": data.get("targeted_condition", ""),
                 "diagnostic_criteria": data.get("diagnostic_criteria", ""),
                 "interventions_tested": data.get("interventions_tested", ""),
+                "comparison_group": data.get("comparison_group", ""),
             }
 
         # Append each outcome row
@@ -143,13 +146,11 @@ if files:
     if rows:
         df = pd.DataFrame(rows)
 
-        # Optional: drop duplicate outcome rows (same outcome + timepoint)
+        # Deduplicate outcome rows (case‑insensitive)
         if DROP_DUPLICATE_OUTCOMES:
-            df = df.drop_duplicates(subset=[
-                "pdf_name",
-                "outcome_measured",
-                "timepoint"
-            ])
+            df["outcome_measured_lower"] = df["outcome_measured"].str.lower().str.strip()
+            df = df.drop_duplicates(subset=["pdf_name", "outcome_measured_lower"])
+            df = df.drop(columns=["outcome_measured_lower"])
 
         # Desired column order
         desired_cols = [
@@ -161,6 +162,7 @@ if files:
             "targeted_condition",
             "diagnostic_criteria",
             "interventions_tested",
+            "comparison_group",
             "outcome_measured",
             "outcome_definition",
             "measurement_method",
