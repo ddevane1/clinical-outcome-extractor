@@ -255,7 +255,10 @@ if files:
             "measurement_method",
             "timepoint",
         ]
-        df = df[desired_cols]
+        
+        # Only use columns that actually exist in the DataFrame
+        available_cols = [col for col in desired_cols if col in df.columns]
+        df = df[available_cols]
 
         # Display summary
         st.success(f"Extracted {len(df)} unique outcomes from {len(files)} PDF(s)")
@@ -265,8 +268,11 @@ if files:
         study_cols = ["pdf_name", "first_author_surname", "study_design", "study_country", 
                      "patient_population", "targeted_condition", "diagnostic_criteria",
                      "interventions_tested", "comparison_group"]
-        study_df = df[study_cols].drop_duplicates()
-        st.dataframe(study_df)
+        # Only use columns that actually exist
+        available_study_cols = [col for col in study_cols if col in df.columns]
+        if available_study_cols:
+            study_df = df[available_study_cols].drop_duplicates()
+            st.dataframe(study_df)
         
         # Show outcomes
         st.subheader("Outcomes Extracted")
