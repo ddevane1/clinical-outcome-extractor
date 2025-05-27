@@ -199,21 +199,48 @@ def extract_outcomes(text: str, pdf_name: str):
     # Add pdf_name
     study_info["pdf_name"] = pdf_name
     
-    # Deduplicate outcomes
-    seen = set()
-    unique_outcomes = []
-    for outcome in all_outcomes:
-        key = (
-            outcome.get("outcome_type", ""),
-            outcome.get("outcome_name", ""),
-            outcome.get("outcome_specific", ""),
-            outcome.get("timepoint", "")
-        )
-        if key not in seen:
-            seen.add(key)
-            unique_outcomes.append(outcome)
+    # Deduplicate and merge outcomes
+    domain_map = {}  # domain_name -> domain_info
     
-    return study_info, unique_outcomes
+    for outcome in all_outcomes:
+        if outcome.get("outcome_type") == "domain":
+            domain_name = outcome.get("outcome_name", "")
+            if domain_name not in domain_map:
+                domain_map[domain_name] = {
+                    "outcome": outcome,
+                    "specific_outcomes": []
+                }
+            # Update domain info with non-None values
+            for field in ["definition", "measurement_method", "timepoint"]:
+                if domain_map[domain_name]["outcome"].get(field) == "None" and outcome.get(field) != "None":
+                    domain_map[domain_name]["outcome"][field] = outcome.get(field)
+    
+    # Add specific outcomes to their domains
+    for outcome in all_outcomes:
+        if outcome.get("outcome_type") == "specific":
+            domain_name = outcome.get("outcome_name", "")
+            if domain_name in domain_map:
+                # Check if this specific outcome already exists
+                specific_name = outcome.get("outcome_specific", "")
+                exists = False
+                for existing in domain_map[domain_name]["specific_outcomes"]:
+                    if existing.get("outcome_specific") == specific_name:
+                        exists = True
+                        # Update with non-None values
+                        for field in ["definition", "measurement_method", "timepoint"]:
+                            if existing.get(field) == "None" and outcome.get(field) != "None":
+                                existing[field] = outcome.get(field)
+                        break
+                if not exists:
+                    domain_map[domain_name]["specific_outcomes"].append(outcome)
+    
+    # Convert back to flat list
+    final_outcomes = []
+    for domain_name, domain_data in domain_map.items():
+        final_outcomes.append(domain_data["outcome"])
+        final_outcomes.extend(domain_data["specific_outcomes"])
+    
+    return study_info, final_outcomes
 
 # ---------- Streamlit UI ----------
 st.title("Clinical Trial Hierarchical Outcome Extractor")
@@ -290,6 +317,8 @@ if files:
             st.write(f"**{domain}**")
             if domain_row['outcome_specific']:
                 st.write(f"  {domain_row['outcome_specific']}")
+            if domain_row['timepoint'] != 'None':
+                st.write(f"  *Timepoint: {domain_row['timepoint']}*")
             
             # Show specific outcomes
             specific = df[(df['outcome_type'] == 'specific') & (df['outcome_domain'] == domain)]
@@ -297,9 +326,104 @@ if files:
                 st.write(f"  • {row['outcome_specific']}")
                 if row['outcome_definition'] != 'None':
                     st.write(f"    Definition: {row['outcome_definition']}")
-                if row['timepoint'] != 'None':
+                if row['timepoint'] != 'None' and row['timepoint'] != domain_row['timepoint']:
                     st.write(f"    Timepoint: {row['timepoint']}")
             st.write("")
+        
+        # Create a cleaner table view
+        st.subheader("Structured Table View")
+        
+        # Create display dataframe with clearer structure
+        display_rows = []
+        for domain in domains:
+            domain_data = df[(df['outcome_type'] == 'domain') & (df['outcome_domain'] == domain)].iloc[0]
+            specific_outcomes = df[(df['outcome_type'] == 'specific') & (df['outcome_domain'] == domain)]
+            
+            # Add domain header row
+            display_rows.append({
+                'Level': '▼ DOMAIN',
+                'Outcome': domain,
+                'Definition': domain_data['outcome_definition'] if domain_data['outcome_definition'] != 'None' else '',
+                'Measurement Method': domain_data['measurement_method'] if domain_data['measurement_method'] != 'None' else '',
+                'Timepoint': domain_data['timepoint'] if domain_data['timepoint'] != 'None' else '',
+                'pdf_name': domain_data['pdf_name']
+            })
+            
+            # Add specific outcomes
+            for _, outcome in specific_outcomes.iterrows():
+                display_rows.append({
+                    'Level': '    →',
+                    'Outcome': outcome['outcome_specific'],
+                    'Definition': outcome['outcome_definition'] if outcome['outcome_definition'] != 'None' else '',
+                    'Measurement Method': outcome['measurement_method'] if outcome['measurement_method'] != 'None' else '',
+                    'Timepoint': outcome['timepoint'] if outcome['timepoint'] != 'None' else '',
+                    'pdf_name': outcome['pdf_name']
+                })
+        
+        display_df = pd.DataFrame(display_rows)
+        
+        # Style the dataframe
+        def style_hierarchy(val):
+            if '▼ DOMAIN' in str(val):
+                return 'font-weight: bold; background-color: #e6f3ff;'
+            return ''
+        
+        styled_df = display_df.style.applymap(style_hierarchy, subset=['Level'])
+        st.dataframe(styled_df, use_container_width=True)
+        
+        # Alternative CSV format without repeating domains
+        st.subheader("Export Options")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # Original format with all data
+            st.download_button(
+                "Download Full Hierarchical CSV",
+                df.to_csv(index=False),
+                "hierarchical_outcomes_full.csv",
+                mime="text/csv",
+                help="Contains all data with outcome_type column distinguishing domains from specific outcomes"
+            )
+        
+        with col2:
+            # Create a flattened version for easier reading
+            flat_rows = []
+            for domain in domains:
+                domain_data = df[(df['outcome_type'] == 'domain') & (df['outcome_domain'] == domain)].iloc[0]
+                specific_outcomes = df[(df['outcome_type'] == 'specific') & (df['outcome_domain'] == domain)]
+                
+                if len(specific_outcomes) == 0:
+                    # Domain with no specific outcomes
+                    flat_row = domain_data.to_dict()
+                    flat_row['outcome_domain_or_specific'] = f"[DOMAIN] {domain}"
+                    flat_rows.append(flat_row)
+                else:
+                    # Add specific outcomes with domain info
+                    for _, outcome in specific_outcomes.iterrows():
+                        flat_row = domain_data.to_dict()
+                        flat_row.update({
+                            'outcome_domain_or_specific': f"{domain} → {outcome['outcome_specific']}",
+                            'outcome_definition': outcome['outcome_definition'],
+                            'measurement_method': outcome['measurement_method'],
+                            'timepoint': outcome['timepoint'] if outcome['timepoint'] != domain_data['timepoint'] else outcome['timepoint']
+                        })
+                        flat_rows.append(flat_row)
+            
+            flat_df = pd.DataFrame(flat_rows)
+            # Remove the outcome_type and redundant columns
+            columns_to_keep = ['pdf_name', 'first_author_surname', 'study_design', 'study_country',
+                             'patient_population', 'targeted_condition', 'diagnostic_criteria',
+                             'interventions_tested', 'comparison_group', 'outcome_domain_or_specific',
+                             'outcome_definition', 'measurement_method', 'timepoint']
+            flat_df = flat_df[[col for col in columns_to_keep if col in flat_df.columns]]
+            
+            st.download_button(
+                "Download Simplified CSV",
+                flat_df.to_csv(index=False),
+                "hierarchical_outcomes_simplified.csv",
+                mime="text/csv",
+                help="Simplified format with domain → specific outcome in one column"
+            )
         
         # Show full table
         st.subheader("Complete Data Table")
