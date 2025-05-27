@@ -6,7 +6,7 @@ import streamlit as st
 
 # ----- CONFIG -----
 MODEL = "gpt-4o"
-TOKENS_FOR_RESPONSE = 2048  # Increased for more complex structure
+TOKENS_FOR_RESPONSE = 3072  # Increased to handle more outcomes
 OVERLAP_TOKENS = 100
 FUZZY_THRESHOLD = 0.75
 # -------------------
