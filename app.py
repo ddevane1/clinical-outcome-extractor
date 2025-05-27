@@ -153,7 +153,7 @@ def ask_llm(chunk: str) -> str:
         '      "timepoint": "None"\n'
         '    }\n'
         '  ]\n'
-        '}\n\n"
+        '}\n\n'
         "IMPORTANT REMINDERS:\n"
         "- Use EXACT domain names from the paper\n"
         "- 'Death or complications' NOT 'Death and complications'\n"
