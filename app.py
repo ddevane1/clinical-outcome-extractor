@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -------- app.py (deduplication with fuzzy matching - FIXED) --------
+# -------- app.py (deduplication with fuzzy matching - ENHANCED) --------
 import os, json, re, pdfplumber, pandas as pd, tiktoken, difflib
 from openai import OpenAI
 import streamlit as st
@@ -34,8 +34,8 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
     if chunk:
         yield " ".join(chunk)
 
-# Simple normalisation for outcome names
-STOPWORDS = {"the", "of", "in", "to", "for", "and", "unit", "care", "confirmed", "due", "an", "visits", "visit", "consultations", "admission", "admissions"}
+# Enhanced normalisation for outcome names
+STOPWORDS = {"the", "of", "in", "to", "for", "and", "unit", "care", "confirmed", "due", "an", "visits", "visit", "consultations", "admission", "admissions", "any", "all"}
 def canonical(text: str) -> str:
     text = re.sub(r"[^\w\s]", "", text.lower())
     words = [w for w in text.split() if w not in STOPWORDS]
@@ -55,7 +55,7 @@ def is_similar(a: str, b: str, threshold: float = FUZZY_THRESHOLD) -> bool:
     if a_words.issubset(b_words) or b_words.issubset(a_words):
         return True
     
-    # Check for common medical abbreviations
+    # Check for common medical abbreviations and variations
     replacements = [
         ("hospitalization", "hospital"),
         ("hospitalisation", "hospital"),
@@ -64,7 +64,20 @@ def is_similar(a: str, b: str, threshold: float = FUZZY_THRESHOLD) -> bool:
         ("emergency", "emergency"),
         ("ed", "emergency"),
         ("primary", "primary"),
-        ("gp", "primary")
+        ("gp", "primary"),
+        ("therapy", "therapy"),
+        ("therapies", "therapy"),
+        ("therapeutic", "therapy"),
+        ("treatment", "therapy"),
+        ("neonatal", "neonatal"),
+        ("newborn", "neonatal"),
+        ("infant", "neonatal"),
+        ("fetal", "fetal"),
+        ("foetal", "fetal"),
+        ("fetus", "fetal"),
+        ("growth", "growth"),
+        ("birthweight", "birth weight"),
+        ("birth weight", "birth weight")
     ]
     
     a_normalized = a
@@ -85,14 +98,22 @@ def ask_llm(chunk: str) -> str:
         "1. Extract ONLY information explicitly stated in the text below.\n"
         "2. Use the authors' EXACT WORDING (verbatim) when possible.\n"
         "3. If ANY information is not found in the text, you MUST return \"None\".\n"
-        "4. For measurement methods: Look CAREFULLY for HOW outcomes were measured. This includes:\n"
+        "4. CRITICAL: Look for ALL types of outcomes including:\n"
+        "   - Primary outcomes\n"
+        "   - Secondary outcomes\n"
+        "   - Category headers in tables (e.g., 'Therapy', 'Death or complications', 'Poor fetal growth')\n"
+        "   - Subcategories under main outcomes (e.g., 'Admission to intensive care unit' under 'Therapy')\n"
+        "   - Composite outcomes (e.g., 'Death and neonatal complications')\n"
+        "5. For measurement methods: Look CAREFULLY for HOW outcomes were measured. This includes:\n"
         "   - Data sources (hospital records, primary care records, emergency records, claims data)\n"
-        "   - Assessment tools (questionnaires, scales, lab tests)\n"
+        "   - Assessment tools (questionnaires, scales, lab tests, clinical assessments)\n"
         "   - Review methods (chart review, database query, patient interview)\n"
+        "   - Definitions or criteria used\n"
         "   - ANY description of how the outcome was ascertained or measured\n"
-        "5. For timepoints: Look for WHEN outcomes were measured (e.g., baseline, day 7, week 4, monthly, at discharge, etc.)\n"
-        "6. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n"
-        "7. The measurement method might be described in a different paragraph from the outcome - look carefully!\n\n"
+        "6. For timepoints: Look for WHEN outcomes were measured (e.g., baseline, day 7, week 4, monthly, at discharge, etc.)\n"
+        "7. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n"
+        "8. Extract outcomes from TABLES, FIGURES, and TEXT - outcomes may appear in any format\n"
+        "9. Include both specific outcomes (e.g., 'ventilation with positive airway pressure') AND their broader categories (e.g., 'neonatal therapy')\n\n"
         "Extract the following information:\n\n"
         "STUDY-LEVEL INFORMATION:\n"
         "• first_author_surname – surname of the first author (return \"None\" if not stated).\n"
@@ -104,16 +125,24 @@ def ask_llm(chunk: str) -> str:
         "• interventions_tested – verbatim description of the intervention group(s) (return \"None\" if not stated).\n"
         "• comparison_group – verbatim description of the control/comparator group(s) (return \"None\" if not stated).\n\n"
         "OUTCOME-LEVEL INFORMATION:\n"
-        "• outcomes – list of ALL outcomes mentioned; for each outcome capture:\n"
-        "    • outcome_measured – name of the outcome (e.g., mortality, hospital admission, pain score).\n"
+        "• outcomes – list of ALL outcomes mentioned, including:\n"
+        "    - Primary and secondary outcomes\n"
+        "    - Category headers from tables (e.g., 'Therapy', 'Poor fetal growth')\n"
+        "    - Specific outcomes under categories\n"
+        "    - For each outcome capture:\n"
+        "    • outcome_measured – name of the outcome (e.g., mortality, hospital admission, therapy, poor fetal growth).\n"
         "    • outcome_definition – how the authors defined this outcome (return \"None\" if no definition given).\n"
         "    • measurement_method – HOW it was measured. This is CRITICAL - look for:\n"
         "        - Where data came from (hospital records, primary care records, claims database, etc.)\n"
         "        - What tool was used (specific questionnaire, lab test, clinical assessment)\n"
         "        - How it was collected (chart review, patient interview, automated query)\n"
+        "        - Criteria or thresholds used (e.g., 'birth weight <10th percentile')\n"
         "        If you can't find ANY information about how it was measured, only then return \"None\"\n"
         "    • timepoint – WHEN it was measured (e.g., \"28 days\", \"baseline and 12 weeks\", \"daily for 7 days\").\n\n"
-        "IMPORTANT: Measurement methods are often described separately from outcome names. Look throughout the text!\n\n"
+        "IMPORTANT: \n"
+        "- Include outcomes that appear as table headers or categories (e.g., 'Therapy', 'Poor fetal growth')\n"
+        "- Measurement methods and definitions are often described separately from outcome names\n"
+        "- Look throughout the ENTIRE text including tables!\n\n"
         "Return exactly this JSON structure:\n"
         "{\n"
         '  \"first_author_surname\": \"Smith\" or \"None\",\n'
@@ -132,10 +161,16 @@ def ask_llm(chunk: str) -> str:
         '      \"timepoint\": \"28 days\"\n'
         "    },\n"
         "    {\n"
-        '      \"outcome_measured\": \"Oxygen saturation\",\n'
-        '      \"outcome_definition\": \"None\",\n'
-        '      \"measurement_method\": \"Pulse oximetry\",\n'
-        '      \"timepoint\": \"Baseline, day 1, day 3, day 5, day 7\"\n'
+        '      \"outcome_measured\": \"Therapy\",\n'
+        '      \"outcome_definition\": \"Any neonatal therapy required\",\n'
+        '      \"measurement_method\": \"Clinical records\",\n'
+        '      \"timepoint\": \"Until discharge\"\n'
+        "    },\n"
+        "    {\n"
+        '      \"outcome_measured\": \"Poor fetal growth\",\n'
+        '      \"outcome_definition\": \"Birth weight below specific percentiles\",\n'
+        '      \"measurement_method\": \"Birth weight measurement compared to reference charts\",\n'
+        '      \"timepoint\": \"At birth\"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -252,7 +287,7 @@ def extract_outcomes(text: str, pdf_name: str):
     return study_info, unique_outcomes
 
 # ---------- Streamlit UI ----------
-st.title("Clinical Trial Extractor – Deduplicated Outcomes")
+st.title("Clinical Trial Extractor – Enhanced Outcome Detection")
 
 files = st.file_uploader(
     "Upload PDF trial report(s)",
@@ -318,6 +353,18 @@ if files:
         # Show the complete table
         st.subheader("Extracted Clinical Trial Data")
         st.dataframe(df)
+        
+        # Show some statistics
+        st.subheader("Extraction Statistics")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Outcomes", len(df))
+        with col2:
+            none_count = (df['measurement_method'] == 'None').sum()
+            st.metric("Outcomes with Methods", len(df) - none_count)
+        with col3:
+            none_count = (df['timepoint'] == 'None').sum()
+            st.metric("Outcomes with Timepoints", len(df) - none_count)
         
         st.download_button(
             "Download Complete CSV",
