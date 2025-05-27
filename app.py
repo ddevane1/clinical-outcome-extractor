@@ -98,22 +98,32 @@ def ask_llm(chunk: str) -> str:
         "1. Extract ONLY information explicitly stated in the text below.\n"
         "2. Use the authors' EXACT WORDING (verbatim) when possible.\n"
         "3. If ANY information is not found in the text, you MUST return \"None\".\n"
-        "4. CRITICAL: Look for ALL types of outcomes including:\n"
-        "   - Primary outcomes\n"
-        "   - Secondary outcomes\n"
-        "   - Category headers in tables (e.g., 'Therapy', 'Death or complications', 'Poor fetal growth')\n"
-        "   - Subcategories under main outcomes (e.g., 'Admission to intensive care unit' under 'Therapy')\n"
-        "   - Composite outcomes (e.g., 'Death and neonatal complications')\n"
-        "5. For measurement methods: Look CAREFULLY for HOW outcomes were measured. This includes:\n"
+        "4. CRITICAL OUTCOME EXTRACTION RULES:\n"
+        "   - When you see 'Primary outcome' or 'Secondary outcomes', extract EVERY SINGLE outcome listed\n"
+        "   - When you see a list of outcomes separated by semicolons (;), commas, or 'and', extract EACH one separately\n"
+        "   - Extract outcomes mentioned in sections like 'Outcome Measures', 'Endpoints', 'Primary/Secondary Outcomes'\n"
+        "   - If an outcome has multiple timepoints (e.g., 'before 34 weeks, before 37 weeks, at or after 37 weeks'), create separate entries for each\n"
+        "   - Include ALL outcomes from tables, including category headers AND their subcategories\n"
+        "   - Common outcomes to look for include:\n"
+        "     * Preeclampsia (at various gestational ages)\n"
+        "     * Adverse outcomes of pregnancy (at various timepoints)\n"
+        "     * Stillbirth, neonatal death, perinatal death\n"
+        "     * Neonatal complications\n"
+        "     * Neonatal therapy/treatment\n"
+        "     * Fetal growth (poor fetal growth, small for gestational age, birth weight percentiles)\n"
+        "     * Maternal outcomes\n"
+        "     * Composite outcomes\n"
+        "5. For measurement methods: Look CAREFULLY for HOW outcomes were measured:\n"
         "   - Data sources (hospital records, primary care records, emergency records, claims data)\n"
         "   - Assessment tools (questionnaires, scales, lab tests, clinical assessments)\n"
         "   - Review methods (chart review, database query, patient interview)\n"
-        "   - Definitions or criteria used\n"
-        "   - ANY description of how the outcome was ascertained or measured\n"
-        "6. For timepoints: Look for WHEN outcomes were measured (e.g., baseline, day 7, week 4, monthly, at discharge, etc.)\n"
-        "7. If an outcome is measured at multiple timepoints, list ALL timepoints (e.g., \"baseline, 4 weeks, 12 weeks\")\n"
-        "8. Extract outcomes from TABLES, FIGURES, and TEXT - outcomes may appear in any format\n"
-        "9. Include both specific outcomes (e.g., 'ventilation with positive airway pressure') AND their broader categories (e.g., 'neonatal therapy')\n\n"
+        "   - Definitions or criteria used (e.g., 'according to ISSHP criteria')\n"
+        "   - Birth weight percentile cutoffs (3rd, 5th, 10th percentile)\n"
+        "6. For timepoints: Extract the EXACT timing specified:\n"
+        "   - Gestational age cutoffs (e.g., 'before 34 weeks', 'before 37 weeks', 'at or after 37 weeks')\n"
+        "   - Days after intervention\n"
+        "   - Follow-up periods\n"
+        "7. ALWAYS extract outcomes even if their definition or measurement method is not provided in the current chunk\n\n"
         "Extract the following information:\n\n"
         "STUDY-LEVEL INFORMATION:\n"
         "• first_author_surname – surname of the first author (return \"None\" if not stated).\n"
@@ -125,52 +135,59 @@ def ask_llm(chunk: str) -> str:
         "• interventions_tested – verbatim description of the intervention group(s) (return \"None\" if not stated).\n"
         "• comparison_group – verbatim description of the control/comparator group(s) (return \"None\" if not stated).\n\n"
         "OUTCOME-LEVEL INFORMATION:\n"
-        "• outcomes – list of ALL outcomes mentioned, including:\n"
-        "    - Primary and secondary outcomes\n"
-        "    - Category headers from tables (e.g., 'Therapy', 'Poor fetal growth')\n"
-        "    - Specific outcomes under categories\n"
-        "    - For each outcome capture:\n"
-        "    • outcome_measured – name of the outcome (e.g., mortality, hospital admission, therapy, poor fetal growth).\n"
-        "    • outcome_definition – how the authors defined this outcome (return \"None\" if no definition given).\n"
-        "    • measurement_method – HOW it was measured. This is CRITICAL - look for:\n"
-        "        - Where data came from (hospital records, primary care records, claims database, etc.)\n"
-        "        - What tool was used (specific questionnaire, lab test, clinical assessment)\n"
-        "        - How it was collected (chart review, patient interview, automated query)\n"
-        "        - Criteria or thresholds used (e.g., 'birth weight <10th percentile')\n"
-        "        If you can't find ANY information about how it was measured, only then return \"None\"\n"
-        "    • timepoint – WHEN it was measured (e.g., \"28 days\", \"baseline and 12 weeks\", \"daily for 7 days\").\n\n"
-        "IMPORTANT: \n"
-        "- Include outcomes that appear as table headers or categories (e.g., 'Therapy', 'Poor fetal growth')\n"
-        "- Measurement methods and definitions are often described separately from outcome names\n"
-        "- Look throughout the ENTIRE text including tables!\n\n"
+        "• outcomes – list of ALL outcomes mentioned. Extract EVERY outcome, including:\n"
+        "    - Each outcome listed after 'Primary outcome:' or 'Secondary outcomes:'\n"
+        "    - Each outcome in a semicolon-separated list\n"
+        "    - Each timepoint variation of the same outcome as a separate entry\n"
+        "    - Category headers AND their specific subcategories from tables\n"
+        "    For each outcome capture:\n"
+        "    • outcome_measured – exact name of the outcome\n"
+        "    • outcome_definition – how the authors defined this outcome (return \"None\" if not provided)\n"
+        "    • measurement_method – HOW it was measured (return \"None\" only if not provided)\n"
+        "    • timepoint – WHEN it was measured (exact gestational age or time period)\n\n"
+        "EXAMPLE: If the text says 'Secondary outcomes were adverse outcomes of pregnancy before 34 weeks of gestation, before 37 weeks of gestation, and at or after 37 weeks of gestation; stillbirth or neonatal death; death and neonatal complications; neonatal therapy; and poor fetal growth (birth weight below the 3rd, 5th, or 10th percentile)'\n"
+        "You should extract AT LEAST 7 separate outcomes:\n"
+        "1. adverse outcomes of pregnancy (timepoint: before 34 weeks of gestation)\n"
+        "2. adverse outcomes of pregnancy (timepoint: before 37 weeks of gestation)\n"
+        "3. adverse outcomes of pregnancy (timepoint: at or after 37 weeks of gestation)\n"
+        "4. stillbirth or neonatal death\n"
+        "5. death and neonatal complications\n"
+        "6. neonatal therapy\n"
+        "7. poor fetal growth\n\n"
         "Return exactly this JSON structure:\n"
         "{\n"
-        '  \"first_author_surname\": \"Smith\" or \"None\",\n'
-        '  \"study_design\": \"Randomised controlled trial\" or \"None\",\n'
-        '  \"study_country\": \"Ireland\" or \"None\",\n'
-        '  \"patient_population\": \"Adults aged 18-65 with confirmed COVID-19\" or \"None\",\n'
-        '  \"targeted_condition\": \"COVID-19\" or \"None\",\n'
-        '  \"diagnostic_criteria\": \"RT-PCR confirmed SARS-CoV-2\" or \"None\",\n'
-        '  \"interventions_tested\": \"Remdesivir 200mg IV day 1, then 100mg daily\" or \"None\",\n'
-        '  \"comparison_group\": \"Placebo\" or \"None\",\n'
+        '  \"first_author_surname\": \"Rolnik\" or \"None\",\n'
+        '  \"study_design\": \"multicenter, double-blind, placebo-controlled trial\" or \"None\",\n'
+        '  \"study_country\": \"United Kingdom, Spain, Italy, Belgium, Greece, and Israel\" or \"None\",\n'
+        '  \"patient_population\": \"women with singleton pregnancies at high risk for preterm preeclampsia\" or \"None\",\n'
+        '  \"targeted_condition\": \"preterm preeclampsia\" or \"None\",\n'
+        '  \"diagnostic_criteria\": \"according to the International Society for the Study of Hypertension in Pregnancy\" or \"None\",\n'
+        '  \"interventions_tested\": \"aspirin at a dose of 150 mg per day\" or \"None\",\n'
+        '  \"comparison_group\": \"placebo\" or \"None\",\n'
         '  \"outcomes\": [\n'
         "    {\n"
-        '      \"outcome_measured\": \"All-cause mortality\",\n'
-        '      \"outcome_definition\": \"Death from any cause\" or \"None\",\n'
-        '      \"measurement_method\": \"Medical records review\",\n'
-        '      \"timepoint\": \"28 days\"\n'
+        '      \"outcome_measured\": \"delivery with preeclampsia before 37 weeks of gestation\",\n'
+        '      \"outcome_definition\": \"defined according to the International Society for the Study of Hypertension in Pregnancy\",\n'
+        '      \"measurement_method\": \"clinical diagnosis based on ISSHP criteria\",\n'
+        '      \"timepoint\": \"before 37 weeks of gestation\"\n'
         "    },\n"
         "    {\n"
-        '      \"outcome_measured\": \"Therapy\",\n'
-        '      \"outcome_definition\": \"Any neonatal therapy required\",\n'
-        '      \"measurement_method\": \"Clinical records\",\n'
-        '      \"timepoint\": \"Until discharge\"\n'
+        '      \"outcome_measured\": \"adverse outcomes of pregnancy\",\n'
+        '      \"outcome_definition\": \"None\",\n'
+        '      \"measurement_method\": \"None\",\n'
+        '      \"timepoint\": \"before 34 weeks of gestation\"\n'
         "    },\n"
         "    {\n"
-        '      \"outcome_measured\": \"Poor fetal growth\",\n'
-        '      \"outcome_definition\": \"Birth weight below specific percentiles\",\n'
-        '      \"measurement_method\": \"Birth weight measurement compared to reference charts\",\n'
-        '      \"timepoint\": \"At birth\"\n'
+        '      \"outcome_measured\": \"neonatal therapy\",\n'
+        '      \"outcome_definition\": \"None\",\n'
+        '      \"measurement_method\": \"None\",\n'
+        '      \"timepoint\": \"None\"\n'
+        "    },\n"
+        "    {\n"
+        '      \"outcome_measured\": \"poor fetal growth\",\n'
+        '      \"outcome_definition\": \"birth weight below the 3rd, 5th, or 10th percentile\",\n'
+        '      \"measurement_method\": \"birth weight measurement compared to reference charts\",\n'
+        '      \"timepoint\": \"at birth\"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
