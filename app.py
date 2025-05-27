@@ -37,26 +37,44 @@ def split_text(text, limit, overlap=OVERLAP_TOKENS):
 def ask_llm(chunk: str) -> str:
     prompt = (
         "You are an expert medical reviewer extracting clinical trial outcomes. DO NOT HALLUCINATE.\n\n"
-        "CRITICAL: Identify the HIERARCHICAL STRUCTURE of outcomes from the text below:\n\n"
-        "1. OUTCOME DOMAINS (broad categories):\n"
-        "   - Primary outcome (usually preeclampsia-related)\n"
-        "   - Secondary outcomes (listed after primary)\n"
-        "   - Adverse outcomes (at different gestational ages)\n"
-        "   - Stillbirth or neonatal death\n"
-        "   - Death and neonatal complications\n"
-        "   - Neonatal therapy\n"
-        "   - Poor fetal growth\n"
-        "   - Other domain headers from tables\n\n"
-        "2. SPECIFIC OUTCOMES within each domain:\n"
-        "   - Individual outcomes listed under each domain\n"
-        "   - In tables, items indented under main headings\n"
-        "   - In text, outcomes in semicolon-separated lists\n\n"
-        "EXTRACTION RULES:\n"
-        "- When you see 'Primary outcome:', extract it as a domain\n"
-        "- When you see 'Secondary outcomes:', extract EACH listed outcome\n"
-        "- For tables: main heading = domain, indented items = specific outcomes\n"
-        "- Extract outcomes at ALL timepoints as separate entries\n"
-        "- Use exact wording from the text\n\n"
+        "CRITICAL: Extract the EXACT hierarchical structure of outcomes from the text below.\n\n"
+        "DOMAIN EXTRACTION RULES:\n"
+        "1. Use EXACT wording from the paper for domain names (e.g., 'Death or complications' not 'Death and complications')\n"
+        "2. Common domain patterns in clinical trials:\n"
+        "   - 'Primary outcome' (usually just one)\n"
+        "   - 'Secondary outcomes' (may have multiple subcategories)\n"
+        "   - 'Adverse outcomes at <34 wk of gestation'\n"
+        "   - 'Adverse outcomes at <37 wk of gestation'\n"
+        "   - 'Adverse outcomes at ≥37 wk of gestation'\n"
+        "   - 'Stillbirth or death'\n"
+        "   - 'Death or complications'\n"
+        "   - 'Therapy' or 'Neonatal therapy'\n"
+        "   - 'Poor fetal growth'\n"
+        "3. When outcomes are grouped by timepoint, create separate domains for each timepoint\n"
+        "4. In tables, the main heading (often with '— no. (%)') is the domain name\n"
+        "5. Extract domain names VERBATIM - do not paraphrase or combine\n\n"
+        "SPECIFIC OUTCOME RULES:\n"
+        "1. Items listed under a domain heading in tables\n"
+        "2. Items in semicolon-separated lists under 'Secondary outcomes'\n"
+        "3. Include 'Any' as a specific outcome when it appears (e.g., 'Any therapy')\n"
+        "4. For each specific outcome, note its parent domain\n\n"
+        "EXTRACTION EXAMPLES:\n"
+        "If you see a table like:\n"
+        "Death or complications — no. (%)\n"
+        "  Any                                32 (4.0)\n"
+        "  Miscarriage, stillbirth, or death  19 (2.4)\n"
+        "\n"
+        "Extract as:\n"
+        "- Domain: 'Death or complications' (outcome_type: 'domain')\n"
+        "- Specific: 'Any' under 'Death or complications' (outcome_type: 'specific')\n"
+        "- Specific: 'Miscarriage, stillbirth, or death' under 'Death or complications' (outcome_type: 'specific')\n\n"
+        "If you see:\n"
+        "'Secondary outcomes were adverse outcomes of pregnancy before 34 weeks of gestation, before 37 weeks of gestation...'\n"
+        "\n"
+        "Extract as separate domains:\n"
+        "- Domain: 'Adverse outcomes at <34 wk of gestation'\n"
+        "- Domain: 'Adverse outcomes at <37 wk of gestation'\n"
+        "- Domain: 'Adverse outcomes at ≥37 wk of gestation'\n\n"
         "Return this exact JSON structure:\n"
         "{\n"
         '  "study_info": {\n'
@@ -74,17 +92,33 @@ def ask_llm(chunk: str) -> str:
         '      "outcome_type": "domain",\n'
         '      "outcome_name": "Primary outcome",\n'
         '      "outcome_specific": "delivery with preeclampsia before 37 weeks of gestation",\n'
-        '      "definition": "defined according to ISSHP",\n'
+        '      "definition": "defined according to ISSHP criteria",\n'
         '      "measurement_method": "clinical diagnosis",\n'
         '      "timepoint": "before 37 weeks of gestation"\n'
         '    },\n'
         '    {\n'
         '      "outcome_type": "domain",\n'
-        '      "outcome_name": "Adverse outcomes of pregnancy",\n'
+        '      "outcome_name": "Adverse outcomes at <34 wk of gestation",\n'
         '      "outcome_specific": "",\n'
         '      "definition": "None",\n'
         '      "measurement_method": "None",\n'
-        '      "timepoint": "before 34 weeks of gestation"\n'
+        '      "timepoint": "<34 wk of gestation"\n'
+        '    },\n'
+        '    {\n'
+        '      "outcome_type": "specific",\n'
+        '      "outcome_name": "Adverse outcomes at <34 wk of gestation",\n'
+        '      "outcome_specific": "Any",\n'
+        '      "definition": "None",\n'
+        '      "measurement_method": "clinical records",\n'
+        '      "timepoint": "<34 wk of gestation"\n'
+        '    },\n'
+        '    {\n'
+        '      "outcome_type": "specific",\n'
+        '      "outcome_name": "Adverse outcomes at <34 wk of gestation",\n'
+        '      "outcome_specific": "Preeclampsia",\n'
+        '      "definition": "None",\n'
+        '      "measurement_method": "clinical diagnosis",\n'
+        '      "timepoint": "<34 wk of gestation"\n'
         '    },\n'
         '    {\n'
         '      "outcome_type": "domain",\n'
@@ -103,15 +137,29 @@ def ask_llm(chunk: str) -> str:
         '      "timepoint": "None"\n'
         '    },\n'
         '    {\n'
+        '      "outcome_type": "domain",\n'
+        '      "outcome_name": "Therapy",\n'
+        '      "outcome_specific": "",\n'
+        '      "definition": "neonatal therapy requirements",\n'
+        '      "measurement_method": "None",\n'
+        '      "timepoint": "until discharge"\n'
+        '    },\n'
+        '    {\n'
         '      "outcome_type": "specific",\n'
-        '      "outcome_name": "Death or complications",\n'
-        '      "outcome_specific": "Intraventricular hemorrhage of grade ≥II",\n'
+        '      "outcome_name": "Therapy",\n'
+        '      "outcome_specific": "Admission to intensive care unit",\n'
         '      "definition": "None",\n'
-        '      "measurement_method": "ultrasound",\n'
+        '      "measurement_method": "hospital records",\n'
         '      "timepoint": "None"\n'
         '    }\n'
         '  ]\n'
-        '}\n\n'
+        '}\n\n"
+        "IMPORTANT REMINDERS:\n"
+        "- Use EXACT domain names from the paper\n"
+        "- 'Death or complications' NOT 'Death and complications'\n"
+        "- 'Therapy' or 'Neonatal therapy' as it appears in the paper\n"
+        "- Create separate domains for different timepoints\n"
+        "- Include 'Any' when it appears as a specific outcome\n\n"
         "Text to analyze:\n"
         f"{chunk}"
     )
